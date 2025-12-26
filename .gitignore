@@ -1,5 +1,5 @@
 # Local kube config files
-**/k83s-config
+**/k8s3-config
 
 # Local .terraform directories
 .terraform/
