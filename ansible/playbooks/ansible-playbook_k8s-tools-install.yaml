@@ -1,0 +1,123 @@
+---
+- name: Install K8s Tools
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+
+    - name: Setup VM networking
+      ansible.builtin.shell: |
+          set -o pipefail
+          cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+          net.ipv4.ip_forward = 1
+          EOF
+          sudo sysctl --system
+      args:
+        executable: /bin/bash
+      register: setup_vm_networking
+      changed_when: setup_vm_networking.rc != 0
+
+    - name: Disable swap
+      ansible.builtin.command: swapoff -a
+      register: disable_swap
+      changed_when: disable_swap.rc != 0
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name: "apt-transport-https, ca-certificates, curl, gnupg, lsb-release, containerd, runc"
+        state: present
+        update_cache: true
+      register: install_required_packages
+
+    - name: Download CNI plugins
+      ansible.builtin.get_url:
+        url: "https://github.com/containernetworking/plugins/releases/download/v1.6.2/cni-plugins-linux-amd64-v1.6.2.tgz"
+        dest: "/tmp/cni-plugins.tgz"
+        mode: '0644'
+      register: download_cni_plugins
+      changed_when: download_cni_plugins.status_code == 200
+
+    - name: Make CNI directory
+      ansible.builtin.file:
+        path: "/opt/cni/bin"
+        state: directory
+        mode: '0755'
+      register: make_cni_directory
+
+    - name: Extract CNI plugins
+      ansible.builtin.unarchive:
+        src: "/tmp/cni-plugins.tgz"
+        dest: "/opt/cni/bin"
+        remote_src: true
+        mode: '0755'
+      register: extract_cni_plugins
+      changed_when: extract_cni_plugins.changed
+
+    - name: Make containerd directory
+      ansible.builtin.file:
+        path: "/etc/containerd"
+        state: directory
+        mode: '0755'
+      register: make_containerd_directory
+
+    - name: Create containerd config
+      ansible.builtin.shell: |
+        set -o pipefail
+        containerd config default | sudo tee /etc/containerd/config.toml
+      register: create_containerd_config
+      changed_when: create_containerd_config.rc != 0
+      args:
+        executable: /bin/bash
+        creates: /etc/containerd/config.toml
+
+    - name: Use Systemd Cgroup
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      register: use_systemd_cgroup
+
+    - name: Enable containerd
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
+      register: enable_containerd
+
+    - name: Add Kubernetes APT key
+      ansible.builtin.shell: |
+        set -o pipefail
+        sudo rm -rf /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        sudo mkdir -p -m 0755 /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' \
+          | sudo tee /etc/apt/sources.list.d/kubernetes.list
+      register: add_k8s_apt_key
+      changed_when: add_k8s_apt_key.rc != 0
+      args:
+        executable: /bin/bash
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name:
+          - kubectl
+          - kubelet
+          - kubeadm
+        state: present
+        update_cache: true
+      register: install_k8s
+
+    - name: Hold kubectl
+      ansible.builtin.dpkg_selections:
+        name: kubectl
+        selection: hold
+
+    - name: Hold kubelet
+      ansible.builtin.dpkg_selections:
+        name: kubelet
+        selection: hold
+
+    - name: Hold kubeadm
+      ansible.builtin.dpkg_selections:
+        name: kubeadm
+        selection: hold

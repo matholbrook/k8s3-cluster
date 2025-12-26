@@ -1,0 +1,158 @@
+---
+- name: Initialise Kubernetes Cluster with Flannel
+  hosts: all
+  become: true
+  gather_facts: true
+  strategy: linear
+  tasks:
+
+    - name: Check cluster status
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -tlnp | awk '/*:10250/{print $4}'
+      register: check_cluster_status
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname == groups['k8s3masters'][0]
+      changed_when: false
+      tags:
+        - cluster_init
+
+    - name: Initialise Cluster
+      ansible.builtin.shell: |
+        sudo kubeadm init --pod-network-cidr=10.244.0.0/16
+      register: kubeadm_init
+      changed_when: kubeadm_init.rc == 0
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname == groups['k8s3masters'][0]
+        - check_cluster_status.stdout == ""
+      tags:
+        - kubeadm
+        - cluster_init
+
+    - name: Create kube directory
+      ansible.builtin.file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0750'
+      register: create_kube_dir
+      when: inventory_hostname == groups['k8s3masters'][0]
+      tags:
+        - cluster_join
+
+    - name: Copy kubeconfig to user home
+      ansible.builtin.copy:
+        remote_src: true
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      register: copy_kubeconfig
+      when: inventory_hostname == groups['k8s3masters'][0]
+      tags:
+        - cluster_join
+
+    - name: Download Flannel YAML
+      ansible.builtin.get_url:
+        url: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+        dest: /tmp/kube-flannel.yml
+        mode: '0644'
+      register: download_flannel_yaml
+      when: inventory_hostname == groups['k8s3masters'][0]
+      tags:
+        - flannel
+        - cni
+
+    - name: Check flannel status
+      ansible.builtin.shell: |
+        set -o pipefail
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl get ns | grep kube-flannel
+      register: check_flannel_status
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname == groups['k8s3masters'][0]
+      changed_when: false
+      tags:
+        - cluster_init
+
+    - name: Apply Flannel CNI
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl create -f /tmp/kube-flannel.yml
+      register: apply_flannel_cni
+      changed_when: apply_flannel_cni.rc == 0
+      failed_when: apply_flannel_cni.rc != 0
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname == groups['k8s3masters'][0]
+        - check_flannel_status.stdout == ""
+      tags:
+        - flannel
+        - cni
+
+    - name: Copy kubeadm join command
+      ansible.builtin.shell: |
+          sudo kubeadm token create --print-join-command > /tmp/kubeadm_join_command.txt
+      register: kubeadm_join_command
+      changed_when: kubeadm_join_command.rc != 0
+      args:
+        executable: /bin/bash
+      when: inventory_hostname == groups['k8s3masters'][0]
+      tags:
+        - kubeadm
+        - cluster_join
+
+    - name: Copy kubeadm join command to all localhost
+      ansible.builtin.fetch:
+        src: /tmp/kubeadm_join_command.txt
+        dest: /tmp/
+        flat: true
+        fail_on_missing: true
+      register: copy_kubeadm_join_command
+      when: inventory_hostname == groups['k8s3masters'][0]
+      tags:
+        - kubeadm
+        - cluster_join
+
+    - name: Copy kubeadm join command to all masters
+      ansible.builtin.copy:
+        src: /tmp/kubeadm_join_command.txt
+        dest: /tmp/kubeadm_join_command.txt
+        mode: '0644'
+      register: copy_kubeadm_join_command
+      when: inventory_hostname != groups['k8s3masters'][0]
+      tags:
+        - kubeadm
+        - cluster_join
+
+    - name: Check if other masters are already joined
+      ansible.builtin.shell: |
+          set -o pipefail
+          ss -tlnp | awk '/*:10250/{print $4}'
+      register: check_other_masters
+      args:
+        executable: /bin/bash
+      when: inventory_hostname != groups['k8s3masters'][0]
+      changed_when: false
+      tags:
+        - cluster_join
+
+    - name: Join other masters to cluster
+      ansible.builtin.shell: |
+          sudo bash /tmp/kubeadm_join_command.txt
+      register: join_masters
+      changed_when: join_masters.rc != 0
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname != groups['k8s3masters'][0]
+        - check_other_masters.stdout == ""
+      tags:
+        - cluster_join

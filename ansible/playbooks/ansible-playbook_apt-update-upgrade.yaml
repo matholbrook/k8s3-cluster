@@ -1,0 +1,24 @@
+---
+- name: Update and upgrade APT packages
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update APT package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        upgrade: true
+        state: present
+      when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+    - name: Unconditionally reboot the machine with all defaults
+      ansible.builtin.reboot:
+        msg: "Rebooting machine to apply updates"
+      when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+    - name: Clean up APT packages
+      ansible.builtin.apt:
+        autoremove: true
+        purge: true
+      when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
