@@ -41,7 +41,7 @@ ansible-playbook -i ../ansible/k8s3-hosts.ini ../ansible/playbooks/ansible-playb
 
 ```bash
 ssh-keygen -f '/home/mat/.ssh/known_hosts' -R 'k8s3-vm1'
-ssh mat@k8s3-vm1 "cat ~/.kube/config" > ~/.kube/k8s3-config
+ssh mat@k8s3-vm1 -i ~/.ssh/mh-k8s-ecdsa "cat ~/.kube/config" > ~/.kube/k8s3-config
 export KUBECONFIG=~/.kube/k8s3-config
 $ kubectl get no
 NAME       STATUS     ROLES           AGE    VERSION
@@ -85,3 +85,14 @@ kubectl create -f ../../../k8s/metrics-server/components.yaml
 kubectl -n kube-system get po -w
 ```
 
+## Install MetalLB
+
+## Install ArgoCD with Helm
+
+```bash
+helm repo add argo
+helm repo update
+kubectl create namespace argocd
+helm install argocd argo/argo-cd -n argocd
+
+```
